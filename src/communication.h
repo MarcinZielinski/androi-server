@@ -25,7 +25,7 @@
 #include <time.h>
 
 typedef enum msg_type {
-    LOGIN, MESSAGE
+    LOGIN, MESSAGE, SUCCESS, FAILURE
 } msg_type_t;
 
 typedef struct client {

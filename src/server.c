@@ -17,7 +17,7 @@ int start_server() {
     struct sockaddr_in addr_in;
     memset((char*)&addr_in, 0, sizeof(addr_in));
 
-    char * addr = "192.168.1.126";
+    char * addr = "192.168.1.105";
 
     in_addr_t bin_addr = inet_addr(addr);
     addr_in.sin_addr.s_addr = bin_addr;
@@ -156,22 +156,34 @@ int read_message(struct epoll_event event) {
         return -1;
     }
     else {
+        msg_t response;
+        strcpy(response.name,msg.name);
+        response.timestamp = msg.timestamp;
         switch(msg.type) {
             case MESSAGE:
                 printf("ID(%d) - Message: %s. Sent from %s\n> ",msg.timestamp, msg.message, msg.name);
                 break;
             case LOGIN:
                 //pthread_mutex_lock(&mutex);
+
                 for(int i =0; i<actual_clients-1; ++i) {
                     if(strcmp(clients[i].name,msg.name)==0) {
                         printf("User with the same username: %s, tried to login\n> ",msg.name);
                         //pthread_mutex_unlock(&mutex);
+                        response.type = FAILURE;
+                        if(write(event.data.fd,&response,sizeof(response)) == -1) {
+                            perror("read_message: write");
+                        }
                         close_client(event.data.fd);
                         return -1;
                     }
                 }
                 strcpy(clients[actual_clients-1].name,msg.name);
                 //pthread_mutex_unlock(&mutex);
+                response.type = SUCCESS;
+                if(write(event.data.fd,&response,sizeof(response)) == -1) {
+                    perror("read_message: write");
+                }
                 printf("%d connected. Username: %s\n> ",event.data.fd,msg.name);
                 break;
             default:
