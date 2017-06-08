@@ -17,7 +17,7 @@ int start_server() {
     struct sockaddr_in addr_in;
     memset((char*)&addr_in, 0, sizeof(addr_in));
 
-    char * addr = "192.168.1.105";
+    char * addr = "10.205.11.113";
 
     in_addr_t bin_addr = inet_addr(addr);
     addr_in.sin_addr.s_addr = bin_addr;
@@ -143,6 +143,17 @@ void close_client(int fd) {
     //pthread_mutex_unlock(&mutex);
 }
 
+int broadcast_message(msg_t msg) {
+    int res = 0;
+    for(int i = 0; i<actual_clients;++i) {
+        if(write(clients[i].fd,&msg,sizeof(msg)) == -1) {
+            perror("broadcast_message: write");
+            ++res;
+        }
+    }
+    return res;
+}
+
 int read_message(struct epoll_event event) {
     msg_t msg;
     ssize_t bytes_read = read(event.data.fd,&msg,sizeof(msg));
@@ -156,12 +167,18 @@ int read_message(struct epoll_event event) {
         return -1;
     }
     else {
-        msg_t response;
-        strcpy(response.name,msg.name);
-        response.timestamp = msg.timestamp;
+        //msg_t response;
+        //strcpy(response.name,msg.name);
+        //response.timestamp = msg.timestamp;
+        int broad_res;
         switch(msg.type) {
             case MESSAGE:
                 printf("ID(%d) - Message: %s. Sent from %s\n> ",msg.timestamp, msg.message, msg.name);
+                if((broad_res = broadcast_message(msg)) != 0) {
+                    fprintf(stderr,"failed to send response to %d clients",broad_res);
+                } else {
+                    printf("Broadcasted\n> ");
+                }
                 break;
             case LOGIN:
                 //pthread_mutex_lock(&mutex);
@@ -170,8 +187,8 @@ int read_message(struct epoll_event event) {
                     if(strcmp(clients[i].name,msg.name)==0) {
                         printf("User with the same username: %s, tried to login\n> ",msg.name);
                         //pthread_mutex_unlock(&mutex);
-                        response.type = FAILURE;
-                        if(write(event.data.fd,&response,sizeof(response)) == -1) {
+                        msg.type = FAILURE;
+                        if(write(event.data.fd,&msg,sizeof(msg)) == -1) {
                             perror("read_message: write");
                         }
                         close_client(event.data.fd);
@@ -180,8 +197,8 @@ int read_message(struct epoll_event event) {
                 }
                 strcpy(clients[actual_clients-1].name,msg.name);
                 //pthread_mutex_unlock(&mutex);
-                response.type = SUCCESS;
-                if(write(event.data.fd,&response,sizeof(response)) == -1) {
+                msg.type = SUCCESS;
+                if(write(event.data.fd,&msg,sizeof(msg)) == -1) {
                     perror("read_message: write");
                 }
                 printf("%d connected. Username: %s\n> ",event.data.fd,msg.name);
