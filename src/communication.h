@@ -36,17 +36,16 @@ typedef struct client {
 } client_t;
 
 typedef struct msg {
-    //msg_type_t type;
-    int timestamp;
     char name[MAX_NAME_LEN];
     char message[MAX_MESSAGE_LEN];
+    time_t timestamp;
 } msg_t;
 
 typedef struct {
     msg_type_t type;
-    int timestamp;
     char name[MAX_NAME_LEN];
     char message[MAX_MESSAGE_LEN];
+    time_t timestamp;
 } msg_with_type_t;
 
 
