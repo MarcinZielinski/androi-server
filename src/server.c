@@ -129,6 +129,17 @@ int add_client(struct epoll_event event) {
     return 0;
 }
 
+int broadcast_message(msg_t msg) {
+    int res = 0;
+    msg_with_type_t respond;
+    respond.type = MESSAGE;
+    respond.timestamp = msg.timestamp;
+    strcpy(respond.name,msg.name);
+    strcpy(respond.message,msg.message);
+
+    return res;
+}
+
 void close_client(int fd) {
     pthread_mutex_lock(&mutex);
     for (int i=0, j=0;i<actual_clients;++i,++j) {
@@ -136,6 +147,16 @@ void close_client(int fd) {
             if(close(fd) == -1) {
                 perror("close_client: close");
             }
+            msg_with_type_t msg;
+            msg.type = USER_LEFT;
+            strcpy(msg.name,clients[i].name);
+            for(int k = 0; k<actual_clients;++k) {
+                if(write(clients[k].fd,&msg,sizeof(msg)) == -1) {
+                    perror("broadcast_message: write");
+                    //++res;
+                }
+            }
+
             --j;
         } else {
             clients[j] = clients[i];
@@ -145,22 +166,6 @@ void close_client(int fd) {
     printf("%d disconnected\n> ",fd);
     fflush(stdout);
     pthread_mutex_unlock(&mutex);
-}
-
-int broadcast_message(msg_t msg) {
-    int res = 0;
-    msg_with_type_t respond;
-    respond.type = MESSAGE;
-    respond.timestamp = msg.timestamp;
-    strcpy(respond.name,msg.name);
-    strcpy(respond.message,msg.message);
-    for(int i = 0; i<actual_clients;++i) {
-        if(write(clients[i].fd,&respond,sizeof(respond)) == -1) {
-            perror("broadcast_message: write");
-            ++res;
-        }
-    }
-    return res;
 }
 
 int validate_message(struct epoll_event event, int bytes_read) {
@@ -195,7 +200,7 @@ int read_message(struct epoll_event event) {
             if(validate_message(event, (int) read(event.data.fd, &msg, sizeof(msg))) != 0) {
                 return -1;
             }
-            printf("ID(%d) - Message: %s. Sent from %s\n> ",msg.timestamp, msg.message, msg.name);
+            printf("ID(%zu) - Message: %s. Sent from %s\n> ",msg.timestamp, msg.message, msg.name);
             if((broad_res = broadcast_message(msg)) != 0) {
                 fprintf(stderr,"failed to send response to %d clients",broad_res);
             } else {
