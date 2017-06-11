@@ -2,11 +2,13 @@
 
 
 struct epoll_event events[MAX_EVENTS];
-int socket_fd;
-int epoll_fd;
+int socket_fd = -1;
+int epoll_fd = -1;
 int actual_clients;
 client_t clients[MAX_CLIENTS];
-//pthread_mutex_t mutex; maybe in future some threads will be used
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_attr_t attr;
+
 
 int start_server() {
     if((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
@@ -17,7 +19,7 @@ int start_server() {
     struct sockaddr_in addr_in;
     memset((char*)&addr_in, 0, sizeof(addr_in));
 
-    char * addr = "10.205.11.113";
+    char * addr = "192.168.43.209";
 
     in_addr_t bin_addr = inet_addr(addr);
     addr_in.sin_addr.s_addr = bin_addr;
@@ -118,15 +120,17 @@ int add_client(struct epoll_event event) {
         perror("Error while adding new socket to epoll");
         return -1;
     }
-    //pthread_mutex_lock(&mutex);
+    pthread_mutex_lock(&mutex);
+    clients[actual_clients].pings = 0;
+    clients[actual_clients].pongs = 0;
     clients[actual_clients++].fd = client_fd;
-    //pthread_mutex_unlock(&mutex);
+    pthread_mutex_unlock(&mutex);
 
     return 0;
 }
 
 void close_client(int fd) {
-    //pthread_mutex_lock(&mutex);
+    pthread_mutex_lock(&mutex);
     for (int i=0, j=0;i<actual_clients;++i,++j) {
         if (clients[i].fd == fd) {
             if(close(fd) == -1) {
@@ -140,13 +144,18 @@ void close_client(int fd) {
     --actual_clients;
     printf("%d disconnected\n> ",fd);
     fflush(stdout);
-    //pthread_mutex_unlock(&mutex);
+    pthread_mutex_unlock(&mutex);
 }
 
 int broadcast_message(msg_t msg) {
     int res = 0;
+    msg_with_type_t respond;
+    respond.type = MESSAGE;
+    respond.timestamp = msg.timestamp;
+    strcpy(respond.name,msg.name);
+    strcpy(respond.message,msg.message);
     for(int i = 0; i<actual_clients;++i) {
-        if(write(clients[i].fd,&msg,sizeof(msg)) == -1) {
+        if(write(clients[i].fd,&respond,sizeof(respond)) == -1) {
             perror("broadcast_message: write");
             ++res;
         }
@@ -154,9 +163,8 @@ int broadcast_message(msg_t msg) {
     return res;
 }
 
-int read_message(struct epoll_event event) {
-    msg_t msg;
-    ssize_t bytes_read = read(event.data.fd,&msg,sizeof(msg));
+int validate_message(struct epoll_event event, int bytes_read) {
+    printf("bytes read = %d\n",bytes_read);
     if(bytes_read == -1) {
         if(errno !=EAGAIN && errno != EWOULDBLOCK) {
             perror("Error receiving message from client");
@@ -166,55 +174,139 @@ int read_message(struct epoll_event event) {
         close_client(event.data.fd);
         return -1;
     }
-    else {
-        //msg_t response;
-        //strcpy(response.name,msg.name);
-        //response.timestamp = msg.timestamp;
-        int broad_res;
-        switch(msg.type) {
-            case MESSAGE:
-                printf("ID(%d) - Message: %s. Sent from %s\n> ",msg.timestamp, msg.message, msg.name);
-                if((broad_res = broadcast_message(msg)) != 0) {
-                    fprintf(stderr,"failed to send response to %d clients",broad_res);
-                } else {
-                    printf("Broadcasted\n> ");
-                }
-                break;
-            case LOGIN:
-                //pthread_mutex_lock(&mutex);
-
-                for(int i =0; i<actual_clients-1; ++i) {
-                    if(strcmp(clients[i].name,msg.name)==0) {
-                        printf("User with the same username: %s, tried to login\n> ",msg.name);
-                        //pthread_mutex_unlock(&mutex);
-                        msg.type = FAILURE;
-                        if(write(event.data.fd,&msg,sizeof(msg)) == -1) {
-                            perror("read_message: write");
-                        }
-                        close_client(event.data.fd);
-                        return -1;
-                    }
-                }
-                strcpy(clients[actual_clients-1].name,msg.name);
-                //pthread_mutex_unlock(&mutex);
-                msg.type = SUCCESS;
-                if(write(event.data.fd,&msg,sizeof(msg)) == -1) {
-                    perror("read_message: write");
-                }
-                printf("%d connected. Username: %s\n> ",event.data.fd,msg.name);
-                break;
-            default:
-                break;
-        }
-        fflush(stdout);
-    }
     return 0;
 }
 
+int read_message(struct epoll_event event) {
+    msg_type_t type;
+    msg_t msg;
+    ssize_t bytes_read = read(event.data.fd,&type,sizeof(type));
+    if(validate_message(event, (int) bytes_read) != 0) {
+        return -1;
+    }
+    //msg_t response;
+    //strcpy(response.name,msg.name);
+    //response.timestamp = msg.timestamp;
+    int broad_res;
+    printf("got message, type: ");
+    switch(type) {
+        case MESSAGE:
+            puts("message");
+            if(validate_message(event, (int) read(event.data.fd, &msg, sizeof(msg))) != 0) {
+                return -1;
+            }
+            printf("ID(%d) - Message: %s. Sent from %s\n> ",msg.timestamp, msg.message, msg.name);
+            if((broad_res = broadcast_message(msg)) != 0) {
+                fprintf(stderr,"failed to send response to %d clients",broad_res);
+            } else {
+                printf("Broadcasted\n> ");
+            }
+            break;
+        case LOGIN:
+            puts("login");
+            pthread_mutex_lock(&mutex);
+            if(validate_message(event, (int) read(event.data.fd, &msg, sizeof(msg))) != 0) {
+                return -1;
+            }
+            puts("passed validation");
+            for(int i =0; i<actual_clients-1; ++i) {
+                if(strcmp(clients[i].name,msg.name)==0) {
+                    printf("User with the same username: %s, tried to login\n> ",msg.name);
+                    pthread_mutex_unlock(&mutex);
+                    type = FAILURE;
+                    if(write(event.data.fd,&type,sizeof(type)) == -1) {
+                        perror("read_message: write");
+                    }
+                    close_client(event.data.fd);
+                    return -1;
+                }
+            }
+            strcpy(clients[actual_clients-1].name,msg.name);
+            pthread_mutex_unlock(&mutex);
+            type = SUCCESS;
+            if(write(event.data.fd,&type,sizeof(type)) == -1) {
+                perror("read_message: write");
+            }
+            printf("%d connected. Username: %s\n> ",event.data.fd,msg.name);
+            break;
+        case PONG:
+            puts("pong");
+            pthread_mutex_lock(&mutex);
+            for(int i=0; i<actual_clients; ++i){
+                if(clients[i].fd == event.data.fd) {
+                    clients[i].pongs++;
+                }
+            }
+            pthread_mutex_unlock(&mutex);
+        default:
+            puts("default!");
+            break;
+    }
+    fflush(stdout);
+
+    return 0;
+}
+
+void *pinger_handler(void *args) {
+    int s = 1;
+    while(s){
+        pthread_mutex_lock(&mutex);
+        for(int i=0; i<actual_clients; i++) {
+            msg_type_t type = PING;
+            if(write(clients[i].fd, &type, sizeof(type)) == -1) {
+                perror("pinger: write");
+            }
+            ++(clients[i].pings);
+            pthread_mutex_unlock(&mutex);
+            sleep(5);
+            pthread_mutex_lock(&mutex);
+
+            if (clients[i].pings != clients[i].pongs) {
+                printf("%d has not responded to PING. Disconnecting...\n> ", clients[i].fd);
+                fflush(stdout);
+                for (int k=0, j=0;i<actual_clients;++i,++j) {
+                    if (clients[k].fd == clients[i].fd) {
+                        if(close(clients[i].fd) == -1) {
+                            perror("close");
+                        }
+                        --j;
+                    } else {
+                        clients[j].fd = clients[k].fd;
+                    }
+                }
+                --actual_clients;
+                printf("%d disconnected\n> ",clients[i].fd);
+                fflush(stdout);
+            }
+        }
+        pthread_mutex_unlock(&mutex);
+        sleep(2);
+    }
+    return NULL;
+}
+
+void exit_handler() {
+    pthread_attr_destroy(&attr);
+    if(socket_fd != -1) {
+        shutdown(socket_fd,SHUT_RDWR);
+        close(socket_fd);
+    }
+    if(epoll_fd != -1) {
+        close(epoll_fd);
+    }
+}
+
 int main() {
+    atexit(exit_handler);
+
     if(start_server() == -1) return 1;
 
     if(start_listening() == -1) return 1;
+
+    pthread_t tid;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr,PTHREAD_CREATE_DETACHED);
+    pthread_create(&tid,&attr,pinger_handler,NULL);
 
     int s = 1;
     while(s) {
@@ -228,7 +320,7 @@ int main() {
 
             if(is_event_invalid(event)) continue;
 
-            if(event.data.fd == socket_fd) {// if the data came from inet or unix socket, we've got new connection
+            if(event.data.fd == socket_fd) {// if the data came from inet socket, we've got new connection
                 while(1) {
                     if(actual_clients == MAX_CLIENTS) {
                         fprintf(stderr,"Maximum number of clients reached");
