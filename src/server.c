@@ -144,7 +144,7 @@ int broadcast_message(msg_t msg) {
     int res = 0;
     msg_with_type_t respond;
     respond.type = MESSAGE;
-    respond.timestamp = msg.timestamp;
+    respond.timestamp = time(NULL);
     strcpy(respond.name,msg.name);
     strcpy(respond.message,msg.message);
     for(int i = 0; i<actual_clients;++i) {
