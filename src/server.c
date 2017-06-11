@@ -10,6 +10,17 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_attr_t attr;
 
 
+void exit_handler() {
+    pthread_attr_destroy(&attr);
+    if(socket_fd != -1) {
+        shutdown(socket_fd,SHUT_RDWR);
+        close(socket_fd);
+    }
+    if(epoll_fd != -1) {
+        close(epoll_fd);
+    }
+}
+
 int start_server() {
     if((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
         return -1;
@@ -136,33 +147,35 @@ int broadcast_message(msg_t msg) {
     respond.timestamp = msg.timestamp;
     strcpy(respond.name,msg.name);
     strcpy(respond.message,msg.message);
-
+    for(int i = 0; i<actual_clients;++i) {
+        if(write(clients[i].fd,&respond,sizeof(respond)) == -1) {
+            perror("broadcast_message: write");
+            ++res;
+        }
+    }
     return res;
 }
 
 void close_client(int fd) {
     pthread_mutex_lock(&mutex);
+    client_t client;
     for (int i=0, j=0;i<actual_clients;++i,++j) {
         if (clients[i].fd == fd) {
             if(close(fd) == -1) {
                 perror("close_client: close");
             }
-            msg_with_type_t msg;
-            msg.type = USER_LEFT;
-            strcpy(msg.name,clients[i].name);
-            for(int k = 0; k<actual_clients;++k) {
-                if(write(clients[k].fd,&msg,sizeof(msg)) == -1) {
-                    perror("broadcast_message: write");
-                    //++res;
-                }
-            }
-
+            client = clients[i];
             --j;
         } else {
             clients[j] = clients[i];
         }
     }
     --actual_clients;
+    msg_t msg;
+    strcpy(msg.name, client.name);
+    sprintf(msg.message," disconnected");
+    time(&msg.timestamp);
+    broadcast_message(msg);
     printf("%d disconnected\n> ",fd);
     fflush(stdout);
     pthread_mutex_unlock(&mutex);
@@ -185,6 +198,7 @@ int validate_message(struct epoll_event event, int bytes_read) {
 int read_message(struct epoll_event event) {
     msg_type_t type;
     msg_t msg;
+    char *tmp;
     ssize_t bytes_read = read(event.data.fd,&type,sizeof(type));
     if(validate_message(event, (int) bytes_read) != 0) {
         return -1;
@@ -200,6 +214,11 @@ int read_message(struct epoll_event event) {
             if(validate_message(event, (int) read(event.data.fd, &msg, sizeof(msg))) != 0) {
                 return -1;
             }
+            tmp = malloc(sizeof(char)*(strlen(msg.message)+1));
+            strcpy(tmp, msg.message);
+            sprintf(msg.message,": %s",tmp);
+            free(tmp);
+
             printf("ID(%zu) - Message: %s. Sent from %s\n> ",msg.timestamp, msg.message, msg.name);
             if((broad_res = broadcast_message(msg)) != 0) {
                 fprintf(stderr,"failed to send response to %d clients",broad_res);
@@ -232,6 +251,9 @@ int read_message(struct epoll_event event) {
             if(write(event.data.fd,&type,sizeof(type)) == -1) {
                 perror("read_message: write");
             }
+            sprintf(msg.message," connected");
+            time(&msg.timestamp);
+            broadcast_message(msg);
             printf("%d connected. Username: %s\n> ",event.data.fd,msg.name);
             break;
         case PONG:
@@ -290,16 +312,6 @@ void *pinger_handler(void *args) {
     return NULL;
 }
 
-void exit_handler() {
-    pthread_attr_destroy(&attr);
-    if(socket_fd != -1) {
-        shutdown(socket_fd,SHUT_RDWR);
-        close(socket_fd);
-    }
-    if(epoll_fd != -1) {
-        close(epoll_fd);
-    }
-}
 
 int main() {
     atexit(exit_handler);
