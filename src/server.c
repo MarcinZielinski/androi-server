@@ -142,7 +142,7 @@ int broadcast_message(msg_t msg) {
     int res = 0;
     msg_with_type_t respond;
     respond.type = MESSAGE;
-    respond.timestamp = time(NULL);
+    sprintf(respond.timestamp,"%zu",time(NULL));
     strcpy(respond.name,msg.name);
     strcpy(respond.message,msg.message);
     for(int i = 0; i<actual_clients;++i) {
@@ -173,7 +173,6 @@ void close_client(int fd, int broadcast) {
         msg_t msg;
         strcpy(msg.name, client.name);
         sprintf(msg.message, " disconnected");
-        time(&msg.timestamp);
         broadcast_message(msg);
     }
     printf("%d disconnected\n> ",fd);
@@ -182,7 +181,6 @@ void close_client(int fd, int broadcast) {
 }
 
 int validate_message(struct epoll_event event, int bytes_read) {
-    printf("bytes read = %d\n",bytes_read);
     if(bytes_read == -1) {
         if(errno !=EAGAIN && errno != EWOULDBLOCK) {
             perror("Error receiving message from client");
@@ -203,14 +201,9 @@ int read_message(struct epoll_event event) {
     if(validate_message(event, (int) bytes_read) != 0) {
         return -1;
     }
-    //msg_t response;
-    //strcpy(response.name,msg.name);
-    //response.timestamp = msg.timestamp;
     int broad_res;
-    printf("got message, type: ");
     switch(type) {
         case MESSAGE:
-            puts("message");
             if(validate_message(event, (int) read(event.data.fd, &msg, sizeof(msg))) != 0) {
                 return -1;
             }
@@ -219,7 +212,7 @@ int read_message(struct epoll_event event) {
             sprintf(msg.message,": %s",tmp);
             free(tmp);
 
-            printf("ID(%zu) - Message: %s. Sent from %s\n> ",msg.timestamp, msg.message, msg.name);
+            printf("ID(%s) - Message: %s. Sent from %s\n> ",msg.timestamp, msg.message, msg.name);
             if((broad_res = broadcast_message(msg)) != 0) {
                 fprintf(stderr,"failed to send response to %d clients",broad_res);
             } else {
@@ -227,12 +220,10 @@ int read_message(struct epoll_event event) {
             }
             break;
         case LOGIN:
-            puts("login");
             pthread_mutex_lock(&mutex);
             if(validate_message(event, (int) read(event.data.fd, &msg, sizeof(msg))) != 0) {
                 return -1;
             }
-            puts("passed validation");
             for(int i =0; i<actual_clients-1; ++i) {
                 if(strcmp(clients[i].name,msg.name)==0) {
                     printf("User with the same username: %s, tried to login\n> ",msg.name);
@@ -252,12 +243,10 @@ int read_message(struct epoll_event event) {
                 perror("read_message: write");
             }
             sprintf(msg.message," connected");
-            time(&msg.timestamp);
             broadcast_message(msg);
             printf("%d connected. Username: %s\n> ",event.data.fd,msg.name);
             break;
         case PONG:
-            puts("pong");
             pthread_mutex_lock(&mutex);
             for(int i=0; i<actual_clients; ++i){
                 if(clients[i].fd == event.data.fd) {
@@ -266,7 +255,6 @@ int read_message(struct epoll_event event) {
             }
             pthread_mutex_unlock(&mutex);
         default:
-            puts("default!");
             break;
     }
     fflush(stdout);
@@ -275,23 +263,26 @@ int read_message(struct epoll_event event) {
 }
 
 void *pinger_handler(void *args) {
-    int s = 1;
-    while(s){
+    while(1){
+        // Send pings
         pthread_mutex_lock(&mutex);
         for(int i=0; i<actual_clients; i++) {
             msg_type_t type = PING;
-            if(write(clients[i].fd, &type, sizeof(type)) == -1) {
+            if (write(clients[i].fd, &type, sizeof(type)) == -1) {
                 perror("pinger: write");
             }
             ++(clients[i].pings);
-            pthread_mutex_unlock(&mutex);
-            sleep(5);
-            pthread_mutex_lock(&mutex);
-
+        }
+        // Wait for responses
+        pthread_mutex_unlock(&mutex);
+        sleep(5);
+        pthread_mutex_lock(&mutex);
+        // Check responses
+        for(int i = 0 ;i<actual_clients;++i) {
             if (clients[i].pings != clients[i].pongs) {
                 printf("%d has not responded to PING. Disconnecting...\n> ", clients[i].fd);
                 fflush(stdout);
-                for (int k=0, j=0;i<actual_clients;++i,++j) {
+                for (int k=0, j=0;k<actual_clients;++k,++j) {
                     if (clients[k].fd == clients[i].fd) {
                         if(close(clients[i].fd) == -1) {
                             perror("close");
@@ -307,7 +298,6 @@ void *pinger_handler(void *args) {
             }
         }
         pthread_mutex_unlock(&mutex);
-        sleep(2);
     }
     return NULL;
 }
@@ -334,8 +324,7 @@ int main() {
     pthread_attr_setdetachstate(&attr,PTHREAD_CREATE_DETACHED);
     pthread_create(&tid,&attr,pinger_handler,NULL);
 
-    int s = 1;
-    while(s) {
+    while(1) {
         int n = epoll_wait(epoll_fd,events,MAX_EVENTS,-1);
         if(n == -1) {
             perror("epoll_wait");
