@@ -41,9 +41,9 @@ int start_server() {
         return -1;
     }
 
-//    int enable = 1;
-//    if (setsockopt(socket_fd, SOL_SOCKET, SO_BROADCAST, (const char*)&enable, sizeof(enable)) < 0)
-//        perror("setsockopt(SO_REUSEADDR) failed");
+    int enable = 1;
+    if (setsockopt(socket_fd, SOL_SOCKET, SO_BROADCAST, (const char*)&enable, sizeof(enable)) < 0)
+        perror("setsockopt(SO_REUSEADDR) failed");
 
     printf("IP address: %s\n",inet_ntoa(addr_in.sin_addr));
 
@@ -156,7 +156,7 @@ int broadcast_message(msg_t msg) {
     return res;
 }
 
-void close_client(int fd) {
+void close_client(int fd, int broadcast) {
     pthread_mutex_lock(&mutex);
     client_t client;
     for (int i=0, j=0;i<actual_clients;++i,++j) {
@@ -171,11 +171,13 @@ void close_client(int fd) {
         }
     }
     --actual_clients;
-    msg_t msg;
-    strcpy(msg.name, client.name);
-    sprintf(msg.message," disconnected");
-    time(&msg.timestamp);
-    broadcast_message(msg);
+    if(broadcast) {
+        msg_t msg;
+        strcpy(msg.name, client.name);
+        sprintf(msg.message, " disconnected");
+        time(&msg.timestamp);
+        broadcast_message(msg);
+    }
     printf("%d disconnected\n> ",fd);
     fflush(stdout);
     pthread_mutex_unlock(&mutex);
@@ -189,7 +191,7 @@ int validate_message(struct epoll_event event, int bytes_read) {
         }
         return -1;
     } else if(bytes_read == 0) { // End of file - client closed connection
-        close_client(event.data.fd);
+        close_client(event.data.fd,1);
         return -1;
     }
     return 0;
@@ -241,7 +243,7 @@ int read_message(struct epoll_event event) {
                     if(write(event.data.fd,&type,sizeof(type)) == -1) {
                         perror("read_message: write");
                     }
-                    close_client(event.data.fd);
+                    close_client(event.data.fd,0);
                     return -1;
                 }
             }
@@ -312,9 +314,18 @@ void *pinger_handler(void *args) {
     return NULL;
 }
 
+void sigint_handler(int signum) {
+    exit(0);
+}
 
 int main() {
     atexit(exit_handler);
+
+    struct sigaction sa;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sa.sa_handler = sigint_handler;
+    sigaction(SIGINT,&sa, NULL);
 
     if(start_server() == -1) return 1;
 
