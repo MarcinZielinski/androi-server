@@ -30,9 +30,7 @@ int start_server() {
     struct sockaddr_in addr_in;
     memset((char*)&addr_in, 0, sizeof(addr_in));
 
-    char * addr = "192.168.43.209";
-
-    in_addr_t bin_addr = inet_addr(addr);
+    in_addr_t bin_addr = INADDR_ANY;
     addr_in.sin_addr.s_addr = bin_addr;
     addr_in.sin_family = AF_INET;
     addr_in.sin_port = htons(inet_port);
